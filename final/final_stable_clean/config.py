@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from dataclasses import field
 
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE_PATH = BASE_DIR / "db.sqlite3"
@@ -80,10 +81,7 @@ _load_dotenv()
 class Settings:
     bot_token: str = os.getenv("BOT_TOKEN", "8646213810:AAFBgdufxXg-gTFbQBaLEY8i9JZkkv7gz6I")
     telegram_proxy: str = os.getenv("TELEGRAM_PROXY", "").strip()
-    owner_ids: list[int] = [
-    _to_int("OWNER_ID_1", 1779714149),
-    _to_int("OWNER_ID_2", 1275918062),
-]
+  owner_ids: list[int] = field(default_factory=lambda: [1779714149, 1275918062])
     support_username: str = os.getenv("SUPPORT_USERNAME", "@Velarium_Support")
     public_base_url: str = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
     payment_provider: str = os.getenv("PAYMENT_PROVIDER", "manual_sbp")
