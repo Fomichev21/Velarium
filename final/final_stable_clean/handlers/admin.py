@@ -16,10 +16,16 @@ from database import (
     list_recent_payments,
     list_users,
     mark_payment_failed,
+    reset_subscription,
     set_banned,
     update_balance,
 )
-from payments import complete_payment, deliver_access_message_async, notify_payment_rejected
+from payments import (
+    complete_payment,
+    deliver_access_message_async,
+    notify_payment_rejected,
+    notify_subscription_reset,
+)
 
 router = Router()
 
@@ -28,22 +34,24 @@ class AdminStates(StatesGroup):
     waiting_for_balance_user_id = State()
     waiting_for_balance_amount = State()
     waiting_for_promo_code = State()
-    waiting_for_promo_value = State()
+    waiting_for_promo_days = State()
     waiting_for_broadcast = State()
     waiting_for_ban_user_id = State()
+    waiting_for_reset_user_id = State()
 
 
 def admin_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="👥 Пользователи", callback_data="adm_users")],
-            [InlineKeyboardButton(text="💰 Выдать баланс", callback_data="adm_balance")],
-            [InlineKeyboardButton(text="🎁 Промокоды", callback_data="adm_promo")],
-            [InlineKeyboardButton(text="📊 Статистика", callback_data="adm_stats")],
-            [InlineKeyboardButton(text="💳 Платежи", callback_data="adm_payments")],
-            [InlineKeyboardButton(text="📢 Рассылка", callback_data="adm_broadcast")],
-            [InlineKeyboardButton(text="🚫 Бан", callback_data="adm_ban")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")],
+            [InlineKeyboardButton(text="Пользователи", callback_data="adm_users")],
+            [InlineKeyboardButton(text="Выдать баланс", callback_data="adm_balance")],
+            [InlineKeyboardButton(text="Промокоды", callback_data="adm_promo")],
+            [InlineKeyboardButton(text="Сбросить VPN", callback_data="adm_reset_vpn")],
+            [InlineKeyboardButton(text="Статистика", callback_data="adm_stats")],
+            [InlineKeyboardButton(text="Платежи", callback_data="adm_payments")],
+            [InlineKeyboardButton(text="Рассылка", callback_data="adm_broadcast")],
+            [InlineKeyboardButton(text="Бан", callback_data="adm_ban")],
+            [InlineKeyboardButton(text="Главное меню", callback_data="back_main")],
         ]
     )
 
@@ -52,15 +60,17 @@ def _is_admin(user_id: int) -> bool:
     return get_role(user_id) >= ROLE_ADMIN
 
 
-async def _guard_admin(callback: CallbackQuery | Message) -> bool:
-    add_user(callback.from_user.id, callback.from_user.username)
-    if not _is_admin(callback.from_user.id):
-        if isinstance(callback, CallbackQuery):
-            await callback.answer("Недостаточно прав", show_alert=True)
-        else:
-            await callback.answer("Недостаточно прав")
-        return False
-    return True
+async def _guard_admin(message_or_callback: CallbackQuery | Message) -> bool:
+    add_user(message_or_callback.from_user.id, message_or_callback.from_user.username)
+    if _is_admin(message_or_callback.from_user.id):
+        return True
+
+    text = "Недостаточно прав."
+    if isinstance(message_or_callback, CallbackQuery):
+        await message_or_callback.answer(text, show_alert=True)
+    else:
+        await message_or_callback.answer(text)
+    return False
 
 
 @router.callback_query(F.data == "open_admin")
@@ -68,7 +78,7 @@ async def open_admin(callback: CallbackQuery) -> None:
     if not await _guard_admin(callback):
         return
     await callback.answer()
-    await callback.message.edit_text("⚙️ Админ-панель", reply_markup=admin_menu())
+    await callback.message.edit_text("Админ-панель", reply_markup=admin_menu())
 
 
 @router.callback_query(F.data == "adm_stats")
@@ -79,7 +89,7 @@ async def stats(callback: CallbackQuery) -> None:
     summary = get_stats()
     await callback.answer()
     await callback.message.edit_text(
-        "📊 Статистика\n\n"
+        "Статистика\n\n"
         f"Пользователей: {summary['users']}\n"
         f"Активных подписок: {summary['active_subscriptions']}\n"
         f"Оплаченных счетов: {summary['paid_payments']}\n"
@@ -96,10 +106,13 @@ async def users(callback: CallbackQuery) -> None:
 
     rows = list_users(limit=10)
     if not rows:
-        text = "👥 Пользователей пока нет."
+        text = "Пользователей пока нет."
     else:
-        text = "👥 Последние пользователи\n\n" + "\n".join(
-            f"{row['user_id']} • @{row['username'] or 'unknown'} • роль {row['role']} • баланс {row['balance']}₽"
+        text = "Последние пользователи\n\n" + "\n".join(
+            (
+                f"{row['user_id']} • @{row['username'] or 'unknown'} • "
+                f"роль {row['role']} • подписка до {row['subscription_until'] or 'нет'}"
+            )
             for row in rows
         )
 
@@ -114,10 +127,13 @@ async def payments(callback: CallbackQuery) -> None:
 
     rows = list_recent_payments(limit=10)
     if not rows:
-        text = "💳 Платежей пока нет."
+        text = "Платежей пока нет."
     else:
-        text = "💳 Последние платежи\n\n" + "\n".join(
-            f"{row['invoice_code'] or row['id'][:8]} • user {row['user_id']} • {row['amount']}₽ • {row['status']}"
+        text = "Последние платежи\n\n" + "\n".join(
+            (
+                f"{row['invoice_code'] or row['id'][:8]} • user {row['user_id']} • "
+                f"{row['amount']}₽ • {row['status']}"
+            )
             for row in rows
         )
 
@@ -160,7 +176,7 @@ async def approve_payment(callback: CallbackQuery) -> None:
         "Счет подтвержден.\n\n"
         f"Счет: {updated_payment.get('invoice_code') or payment_id}\n"
         f"Пользователь: {updated_payment['user_id']}\n"
-        f"Сумма: {updated_payment['amount']} RUB\n"
+        f"Сумма: {updated_payment['amount']}₽\n"
         "Статус: Оплачен",
     )
 
@@ -191,7 +207,7 @@ async def reject_payment(callback: CallbackQuery) -> None:
         "Счет отклонен.\n\n"
         f"Счет: {updated_payment.get('invoice_code') or payment_id}\n"
         f"Пользователь: {updated_payment['user_id']}\n"
-        f"Сумма: {updated_payment['amount']} RUB\n"
+        f"Сумма: {updated_payment['amount']}₽\n"
         "Статус: Отклонен",
     )
 
@@ -243,7 +259,7 @@ async def balance_amount(message: Message, state: FSMContext) -> None:
     update_balance(target_user_id, amount)
     await state.clear()
     await message.answer(
-        f"✅ Пользователю {target_user_id} начислено {amount}₽.",
+        f"Пользователю {target_user_id} начислено {amount}₽.",
         reply_markup=admin_menu(),
     )
 
@@ -269,26 +285,73 @@ async def promo_code(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(promo_code=code)
-    await state.set_state(AdminStates.waiting_for_promo_value)
-    await message.answer("Введите сумму в рублях, которую даст промокод.")
+    await state.set_state(AdminStates.waiting_for_promo_days)
+    await message.answer("На сколько дней будет этот промокод?")
 
 
-@router.message(AdminStates.waiting_for_promo_value)
-async def promo_value(message: Message, state: FSMContext) -> None:
+@router.message(AdminStates.waiting_for_promo_days)
+async def promo_days(message: Message, state: FSMContext) -> None:
     if not await _guard_admin(message):
         return
 
     try:
-        value = int(message.text or "")
+        days = int(message.text or "")
     except ValueError:
-        await message.answer("Сумма должна быть числом.")
+        await message.answer("Количество дней должно быть числом.")
+        return
+
+    if days <= 0:
+        await message.answer("Количество дней должно быть больше нуля.")
         return
 
     data = await state.get_data()
-    create_promo(data["promo_code"], value)
+    create_promo(data["promo_code"], days)
     await state.clear()
     await message.answer(
-        f"✅ Промокод {data['promo_code']} сохранен на {value}₽.",
+        f"Промокод {data['promo_code']} сохранен на {days} дн.",
+        reply_markup=admin_menu(),
+    )
+
+
+@router.callback_query(F.data == "adm_reset_vpn")
+async def reset_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await _guard_admin(callback):
+        return
+
+    await callback.answer()
+    await state.set_state(AdminStates.waiting_for_reset_user_id)
+    await callback.message.edit_text("Введите ID пользователя, которому нужно полностью сбросить VPN и подписку.")
+
+
+@router.message(AdminStates.waiting_for_reset_user_id)
+async def reset_user_vpn(message: Message, state: FSMContext) -> None:
+    if not await _guard_admin(message):
+        return
+
+    try:
+        target_user_id = int(message.text or "")
+    except ValueError:
+        await message.answer("Нужен числовой ID.")
+        return
+
+    user = get_user(target_user_id)
+    if user["created_at"] is None:
+        await message.answer("Такого пользователя нет в базе.")
+        return
+
+    try:
+        result = reset_subscription(target_user_id)
+    except Exception as exc:
+        await message.answer(f"Не удалось сбросить подписку: {exc}")
+        return
+
+    await notify_subscription_reset(message.bot, target_user_id)
+    await state.clear()
+    await message.answer(
+        (
+            f"Подписка пользователя {target_user_id} полностью сброшена.\n"
+            f"Доступ на сервере удален: {'да' if result['removed_remote'] else 'нет'}"
+        ),
         reply_markup=admin_menu(),
     )
 
@@ -318,7 +381,7 @@ async def broadcast_send(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await message.answer(
-        f"✅ Рассылка завершена. Доставлено: {delivered}.",
+        f"Рассылка завершена. Доставлено: {delivered}.",
         reply_markup=admin_menu(),
     )
 
@@ -353,6 +416,6 @@ async def ban_toggle(message: Message, state: FSMContext) -> None:
     set_banned(target_user_id, new_state)
     await state.clear()
     await message.answer(
-        f"✅ Пользователь {target_user_id} теперь {'заблокирован' if new_state else 'разблокирован'}.",
+        f"Пользователь {target_user_id} теперь {'заблокирован' if new_state else 'разблокирован'}.",
         reply_markup=admin_menu(),
     )
