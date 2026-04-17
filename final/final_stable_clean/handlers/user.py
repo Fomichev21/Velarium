@@ -24,9 +24,15 @@ from database import (
     get_user,
     get_vpn_key,
     is_banned,
+    reset_subscription,
     use_promo,
 )
-from payments import check_payment, create_payment_for_tariff, notify_admins_about_payment
+from payments import (
+    check_payment,
+    create_payment_for_tariff,
+    notify_admins_about_payment,
+    notify_subscription_reset,
+)
 from vpn import build_download_name
 
 router = Router()
@@ -102,14 +108,15 @@ def payment_actions(payment_id: str) -> InlineKeyboardMarkup:
 async def _guard_user(message_or_callback: Message | CallbackQuery, referred_by: int | None = None) -> bool:
     user = message_or_callback.from_user
     add_user(user.id, user.username, referred_by=referred_by)
-    if is_banned(user.id):
-        text = "Ваш аккаунт заблокирован. Напишите в поддержку, если это ошибка."
-        if isinstance(message_or_callback, CallbackQuery):
-            await message_or_callback.answer(text, show_alert=True)
-        else:
-            await message_or_callback.answer(text)
-        return False
-    return True
+    if not is_banned(user.id):
+        return True
+
+    text = "Ваш аккаунт заблокирован. Напишите в поддержку, если это ошибка."
+    if isinstance(message_or_callback, CallbackQuery):
+        await message_or_callback.answer(text, show_alert=True)
+    else:
+        await message_or_callback.answer(text)
+    return False
 
 
 def profile_text(user_id: int) -> str:
@@ -125,6 +132,14 @@ def profile_text(user_id: int) -> str:
         f"Баланс: {balance} RUB\n"
         f"Подписка до: {subscription}\n"
         f"VPN ссылка: {access_url}"
+    )
+
+
+def subscription_status_text(user_id: int) -> str:
+    user = get_user(user_id)
+    return (
+        "Статус подписки\n\n"
+        f"Дата окончания: {user['subscription_until'] or 'подписка не активна'}"
     )
 
 
@@ -184,11 +199,63 @@ async def ref_cmd(message: Message) -> None:
 
     await message.answer(
         "Реферальная программа\n\n"
-        "За каждого друга, который оплатит первую подписку, начисляется бонус.\n\n"
+        "За каждого друга, который оплатит первую подписку, вы получите +3 дня к своей подписке.\n\n"
         f"Ваша ссылка:\n{link}\n\n"
         f"Приглашено: {stats['total']}\n"
         f"С бонусом: {stats['rewarded']}",
         reply_markup=back_to_main_markup(user_id),
+    )
+
+
+@router.message(Command("stats"))
+async def stats_cmd(message: Message) -> None:
+    if not await _guard_user(message):
+        return
+
+    await message.answer(
+        subscription_status_text(message.from_user.id),
+        reply_markup=back_to_main_markup(message.from_user.id),
+    )
+
+
+@router.message(Command("resert"))
+@router.message(Command("reset"))
+async def reset_cmd(message: Message) -> None:
+    if not await _guard_user(message):
+        return
+
+    if get_role(message.from_user.id) < ROLE_ADMIN:
+        await message.answer("Команда доступна только администраторам.")
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer("Использование: /resert <user_id>")
+        return
+
+    try:
+        target_user_id = int(parts[1])
+    except ValueError:
+        await message.answer("Нужен числовой user_id.")
+        return
+
+    user = get_user(target_user_id)
+    if user["created_at"] is None:
+        await message.answer("Такого пользователя нет в базе.")
+        return
+
+    try:
+        result = reset_subscription(target_user_id)
+    except Exception as exc:
+        await message.answer(f"Не удалось сбросить подписку: {exc}")
+        return
+
+    await notify_subscription_reset(message.bot, target_user_id)
+    await message.answer(
+        (
+            f"Подписка пользователя {target_user_id} полностью сброшена.\n"
+            f"Доступ на сервере удален: {'да' if result['removed_remote'] else 'нет'}"
+        )
     )
 
 
@@ -292,7 +359,11 @@ async def payment_status(callback: CallbackQuery) -> None:
         return
 
     vpn_key = get_vpn_key(callback.from_user.id)
-    link_label = "Subscription Link" if vpn_key and vpn_key["config_text"].startswith(("http://", "https://")) else "VPN ссылка"
+    link_label = (
+        "Subscription Link"
+        if vpn_key and vpn_key["config_text"].startswith(("http://", "https://"))
+        else "VPN ссылка"
+    )
     await callback.answer("Оплата подтверждена")
     await callback.message.edit_text(
         "Оплата подтверждена.\n\n"
@@ -356,7 +427,16 @@ async def promo_handler(message: Message, state: FSMContext) -> None:
     if not await _guard_user(message):
         return
 
-    result = use_promo(message.from_user.id, message.text or "")
+    try:
+        result = use_promo(message.from_user.id, message.text or "")
+    except Exception as exc:
+        await state.clear()
+        await message.answer(
+            f"Не удалось активировать промокод: {exc}",
+            reply_markup=main_menu(message.from_user.id),
+        )
+        return
+
     await state.clear()
     if result is None:
         await message.answer(
@@ -366,6 +446,8 @@ async def promo_handler(message: Message, state: FSMContext) -> None:
         return
 
     await message.answer(
-        f"Промокод активирован. На баланс начислено {result} RUB.",
+        "Промокод активирован.\n\n"
+        f"Добавлено дней: {result['days']}\n"
+        f"Подписка активна до: {result['subscription_until']}",
         reply_markup=main_menu(message.from_user.id),
     )
