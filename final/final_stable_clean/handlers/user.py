@@ -40,10 +40,10 @@ def support_url() -> str:
 def main_menu(user_id: int) -> InlineKeyboardMarkup:
     role = get_role(user_id)
     rows = [
-        [InlineKeyboardButton(text="Купить VPN", callback_data="buy_menu")],
-        [InlineKeyboardButton(text="Профиль", callback_data="profile")],
-        [InlineKeyboardButton(text="Промокод", callback_data="promo")],
-        [InlineKeyboardButton(text="Поддержка", url=support_url())],
+        [InlineKeyboardButton(text="💳 Купить VPN", callback_data="buy_menu")],
+        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")],
+        [InlineKeyboardButton(text="🎁 Промокод", callback_data="promo")],
+        [InlineKeyboardButton(text="📞 Поддержка", url=support_url())],
     ]
     if role >= ROLE_ADMIN:
         rows.insert(3, [InlineKeyboardButton(text="Админка", callback_data="open_admin")])
