@@ -103,7 +103,7 @@ class Settings:
     wireguard_interface: str = os.getenv("WG_INTERFACE", "wg0")
     threexui_base_url: str = os.getenv("THREEXUI_BASE_URL", "https://velariumvpn.ru/TNi2gkgQ4uHfq8OtCP").rstrip("/")
     threexui_username: str = os.getenv("THREEXUI_USERNAME", "admin")
-    threexui_password: str = os.getenv("THREEXUI_PASSWORD", "MINIstyz1976")
+    threexui_password: str = os.getenv("THREEXUI_PASSWORD", "velarium2000")
     threexui_inbound_id: int = _to_int("THREEXUI_INBOUND_ID=2")
     threexui_inbound_remark: str = os.getenv("THREEXUI_INBOUND_REMARK", "")
     threexui_sub_base_url: str = os.getenv("THREEXUI_SUB_BASE_URL", "https://velariumvpn.ru:2096/sub/").rstrip("/")
