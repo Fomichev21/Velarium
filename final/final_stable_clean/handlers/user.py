@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -7,12 +9,13 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
 )
 
-from config import ROLE_ADMIN, TARIFFS, settings
+from config import BASE_DIR, ROLE_ADMIN, TARIFFS, settings
 from database import (
     add_user,
     get_balance,
@@ -27,6 +30,7 @@ from payments import check_payment, create_payment_for_tariff, notify_admins_abo
 from vpn import build_download_name
 
 router = Router()
+START_BANNER_PATH = BASE_DIR / "assets" / "start-banner.png"
 
 
 class UserStates(StatesGroup):
@@ -37,13 +41,24 @@ def support_url() -> str:
     return f"https://t.me/{settings.support_username.lstrip('@')}"
 
 
+async def send_start_banner(message: Message) -> None:
+    banner_path = Path(START_BANNER_PATH)
+    if not banner_path.exists():
+        return
+
+    try:
+        await message.answer_photo(FSInputFile(str(banner_path)))
+    except Exception:
+        return
+
+
 def main_menu(user_id: int) -> InlineKeyboardMarkup:
     role = get_role(user_id)
     rows = [
-        [InlineKeyboardButton(text="💳 Купить VPN", callback_data="buy_menu")],
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")],
-        [InlineKeyboardButton(text="🎁 Промокод", callback_data="promo")],
-        [InlineKeyboardButton(text="📞 Поддержка", url=support_url())],
+        [InlineKeyboardButton(text="Купить VPN", callback_data="buy_menu")],
+        [InlineKeyboardButton(text="Профиль", callback_data="profile")],
+        [InlineKeyboardButton(text="Промокод", callback_data="promo")],
+        [InlineKeyboardButton(text="Поддержка", url=support_url())],
     ]
     if role >= ROLE_ADMIN:
         rows.insert(3, [InlineKeyboardButton(text="Админка", callback_data="open_admin")])
@@ -128,6 +143,7 @@ async def start(message: Message) -> None:
     if not await _guard_user(message, referred_by=referred_by):
         return
 
+    await send_start_banner(message)
     await message.answer(
         "Добро пожаловать в VPN-бот.\n\n"
         "Здесь можно оплатить тариф, дождаться подтверждения админа и получить ссылку для подключения.",
