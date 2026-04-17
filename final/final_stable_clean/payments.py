@@ -11,6 +11,8 @@ from database import (
     create_payment,
     get_payment,
     list_admin_ids,
+    list_users_expiring_soon,
+    mark_expiry_notice_sent,
     mark_payment_access_sent,
     mark_payment_paid,
 )
@@ -30,12 +32,13 @@ def create_payment_for_tariff(user_id: int, tariff_code: str) -> dict[str, str |
         payment_url=pay_url,
     )
 
+    payment = get_payment(payment_id)
     return {
         "id": payment_id,
         "url": pay_url,
         "amount": tariff["price"],
         "title": tariff["title"],
-        "invoice_code": get_payment(payment_id)["invoice_code"],
+        "invoice_code": payment["invoice_code"],
         "invoice_seq": invoice_seq,
     }
 
@@ -56,16 +59,17 @@ async def deliver_access_message_async(payment_result: dict | None) -> bool:
     user = payment_result.get("user") or {}
     vpn_key = payment_result.get("vpn_key") or {}
     payment_id = payment.get("id")
-    access_url = vpn_key.get("config_text")
+    access_url = str(vpn_key.get("config_text") or "").strip()
 
     if not payment_id or payment.get("access_sent_at") or not access_url:
         return False
 
+    access_label = "Subscription Link" if access_url.startswith(("http://", "https://")) else "VPN ссылка"
     text = (
         "Оплата подтверждена.\n\n"
         f"Подписка активна до: {user.get('subscription_until') or 'не задано'}\n"
         f"UUID: {vpn_key.get('vpn_key') or 'не задан'}\n"
-        f"Subscription Link:\n{access_url}"
+        f"{access_label}:\n{access_url}"
     )
 
     try:
@@ -89,14 +93,8 @@ def build_admin_payment_markup(payment_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="Принять",
-                    callback_data=f"adm_payment_accept:{payment_id}",
-                ),
-                InlineKeyboardButton(
-                    text="Отклонить",
-                    callback_data=f"adm_payment_reject:{payment_id}",
-                ),
+                InlineKeyboardButton(text="Принять", callback_data=f"adm_payment_accept:{payment_id}"),
+                InlineKeyboardButton(text="Отклонить", callback_data=f"adm_payment_reject:{payment_id}"),
             ]
         ]
     )
@@ -153,3 +151,43 @@ async def notify_payment_rejected(bot: Bot, payment: dict | None) -> bool:
         return False
 
     return True
+
+
+async def notify_subscription_reset(bot: Bot, user_id: int) -> bool:
+    try:
+        await bot.send_message(
+            user_id,
+            (
+                "Доступ к VPN и подписка были сброшены администратором.\n\n"
+                "Если это ошибка, напишите в поддержку."
+            ),
+        )
+    except Exception:
+        return False
+
+    return True
+
+
+async def process_expiry_reminders(bot: Bot) -> int:
+    reminded = 0
+    for user in list_users_expiring_soon(within_hours=24):
+        subscription_until = str(user.get("subscription_until") or "").strip()
+        if not subscription_until:
+            continue
+
+        try:
+            await bot.send_message(
+                int(user["user_id"]),
+                (
+                    "Подписка заканчивается меньше чем через 24 часа.\n\n"
+                    f"Дата окончания: {subscription_until}\n"
+                    "Продли подписку заранее, чтобы не потерять доступ."
+                ),
+            )
+        except Exception:
+            continue
+
+        mark_expiry_notice_sent(int(user["user_id"]), subscription_until)
+        reminded += 1
+
+    return reminded
