@@ -185,7 +185,8 @@ def init_db() -> None:
         conn.commit()
 
     if settings.owner_ids:
-        ensure_owner(settings.owner_id)
+        for owner_id in settings.owner_ids:
+    ensure_owner(owner_id)
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
