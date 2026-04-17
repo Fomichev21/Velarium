@@ -186,8 +186,7 @@ def init_db() -> None:
 
     if settings.owner_ids:
         for owner_id in settings.owner_ids:
-    ensure_owner(owner_id)
-
+             ensure_owner(owner_id)
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row else None
