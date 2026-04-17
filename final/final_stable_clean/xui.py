@@ -5,7 +5,7 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -193,7 +193,18 @@ def build_subscription_url(sub_id: str) -> str:
         if not parsed.scheme or not parsed.netloc:
             raise ThreeXUIError("THREEXUI_SUB_BASE_URL is not configured.")
         base_url = f"{parsed.scheme}://{parsed.netloc}"
-    return f"{base_url.rstrip('/')}/{settings.threexui_sub_path}/{sub_id}"
+
+    parsed = urlsplit(base_url)
+    path_segments = [segment for segment in parsed.path.split("/") if segment]
+    sub_path = settings.threexui_sub_path.strip("/")
+
+    if sub_path and (not path_segments or path_segments[-1] != sub_path):
+        path_segments.append(sub_path)
+
+    path_segments.append(sub_id)
+    normalized_path = "/" + "/".join(path_segments)
+
+    return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))
 
 
 def _iso_to_unix_ms(value: str) -> int:
