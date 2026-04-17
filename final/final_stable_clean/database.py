@@ -184,7 +184,7 @@ def init_db() -> None:
         _ensure_referrals_table(conn)
         conn.commit()
 
-    if settings.owner_id:
+    if settings.owner_ids:
         ensure_owner(settings.owner_id)
 
 
