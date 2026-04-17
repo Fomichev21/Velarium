@@ -276,12 +276,13 @@ async def payment_status(callback: CallbackQuery) -> None:
         return
 
     vpn_key = get_vpn_key(callback.from_user.id)
+    link_label = "Subscription Link" if vpn_key and vpn_key["config_text"].startswith(("http://", "https://")) else "VPN ссылка"
     await callback.answer("Оплата подтверждена")
     await callback.message.edit_text(
         "Оплата подтверждена.\n\n"
         f"Счет: {payment.get('invoice_code') or payment_id}\n"
         f"Подписка активна до: {get_user(callback.from_user.id)['subscription_until']}\n"
-        f"VPN ссылка: {vpn_key['config_text'] if vpn_key else 'создается'}",
+        f"{link_label}: {vpn_key['config_text'] if vpn_key else 'создается'}",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="Получить ссылку", callback_data="download_config")],
@@ -304,6 +305,13 @@ async def download_config(callback: CallbackQuery) -> None:
     await callback.answer()
     config_bytes = vpn_key["config_text"].encode("utf-8")
     file = BufferedInputFile(config_bytes, filename=build_download_name(callback.from_user.id))
+    if vpn_key["config_text"].startswith(("http://", "https://")):
+        await callback.message.answer(
+            "Вот ваш Subscription Link:\n\n"
+            f"{vpn_key['config_text']}"
+        )
+        return
+
     await callback.message.answer(
         "Вот ваша VPN-ссылка:\n\n"
         f"{vpn_key['config_text']}"
