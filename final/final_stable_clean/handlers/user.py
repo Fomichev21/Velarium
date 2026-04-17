@@ -61,10 +61,10 @@ async def send_start_banner(message: Message) -> None:
 def main_menu(user_id: int) -> InlineKeyboardMarkup:
     role = get_role(user_id)
     rows = [
-        [InlineKeyboardButton(text="Купить VPN", callback_data="buy_menu")],
-        [InlineKeyboardButton(text="Профиль", callback_data="profile")],
-        [InlineKeyboardButton(text="Промокод", callback_data="promo")],
-        [InlineKeyboardButton(text="Поддержка", url=support_url())],
+        [InlineKeyboardButton(text="💳 Купить VPN", callback_data="buy_menu")],
+        [InlineKeyboardButton(text="👤Профиль", callback_data="profile")],
+        [InlineKeyboardButton(text="🎁 Промокод", callback_data="promo")],
+        [InlineKeyboardButton(text="📞 Поддержка", url=support_url())],
     ]
     if role >= ROLE_ADMIN:
         rows.insert(3, [InlineKeyboardButton(text="Админка", callback_data="open_admin")])
@@ -157,14 +157,18 @@ async def start(message: Message) -> None:
 
     if not await _guard_user(message, referred_by=referred_by):
         return
-
-    await send_start_banner(message)
-    await message.answer(
-        "Добро пожаловать в VPN-бот.\n\n"
-        "Здесь можно оплатить тариф, дождаться подтверждения админа и получить ссылку для подключения.",
-        reply_markup=main_menu(message.from_user.id),
-    )
-
+        
+await send_start_banner(message)
+await message.answer(
+    "Добро пожаловать в Velarium VPN.\n\n"
+    "С нашим VPN у тебя будет стабильное, быстрое и защищённое соединение без блокировок. "
+    "Никаких лишних переживаний — доступ к нужным сайтам и сервисам всегда под рукой.\n\n"
+    "По всем вопросам:\n"
+    "📩 Поддержка: @Velarium_Support\n"
+    "📢 Новости: @VelariumVPNchannel\n\n"
+    "Хочешь попробовать? Нажми кнопку ниже и получи бесплатный доступ на 3 дня и убедись в качестве работы!🚀",
+    reply_markup=main_menu(message.from_user.id),
+)
 
 @router.message(Command("pay"))
 async def pay_cmd(message: Message) -> None:
@@ -198,9 +202,9 @@ async def ref_cmd(message: Message) -> None:
     stats = get_referral_stats(user_id)
 
     await message.answer(
-        "Реферальная программа\n\n"
-        "За каждого друга, который оплатит первую подписку, вы получите +3 дня к своей подписке.\n\n"
-        f"Ваша ссылка:\n{link}\n\n"
+        "👉Реферальная программа\n\n"
+        "🤝За каждого друга, который оплатит первую подписку, вы получите +3 дня к своей подписке.\n\n"
+        f"🆔Ваша ссылка:\n{link}\n\n"
         f"Приглашено: {stats['total']}\n"
         f"С бонусом: {stats['rewarded']}",
         reply_markup=back_to_main_markup(user_id),
