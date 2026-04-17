@@ -147,6 +147,7 @@ def subscription_status_text(user_id: int) -> str:
 async def start(message: Message) -> None:
     referred_by: int | None = None
     args = message.text.split(maxsplit=1)
+
     if len(args) > 1 and args[1].startswith("ref_"):
         try:
             referred_by = int(args[1][4:])
@@ -157,18 +158,18 @@ async def start(message: Message) -> None:
 
     if not await _guard_user(message, referred_by=referred_by):
         return
-        
-await send_start_banner(message)
-await message.answer(
-    "Добро пожаловать в Velarium VPN.\n\n"
-    "С нашим VPN у тебя будет стабильное, быстрое и защищённое соединение без блокировок. "
-    "Никаких лишних переживаний — доступ к нужным сайтам и сервисам всегда под рукой.\n\n"
-    "По всем вопросам:\n"
-    "📩 Поддержка: @Velarium_Support\n"
-    "📢 Новости: @VelariumVPNchannel\n\n"
-    "Хочешь попробовать? Нажми кнопку ниже и получи бесплатный доступ на 3 дня и убедись в качестве работы!🚀",
-    reply_markup=main_menu(message.from_user.id),
-)
+
+    await send_start_banner(message)
+    await message.answer(
+        "Добро пожаловать в Velarium VPN.\n\n"
+        "С нашим VPN у тебя будет стабильное, быстрое и защищённое соединение без блокировок. "
+        "Никаких лишних переживаний — доступ к нужным сайтам и сервисам всегда под рукой.\n\n"
+        "По всем вопросам:\n"
+        "📩 Поддержка: @Velarium_Support\n"
+        "📢 Новости: @VelariumVPNchannel\n\n"
+        "Хочешь попробовать? Нажми кнопку ниже и получи бесплатный доступ на 3 дня и убедись в качестве работы!🚀",
+        reply_markup=main_menu(message.from_user.id),
+    )
 
 @router.message(Command("pay"))
 async def pay_cmd(message: Message) -> None:
