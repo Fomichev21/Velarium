@@ -26,6 +26,12 @@ class ThreeXUIAccess:
     expiry_ms: int
 
 
+@dataclass(frozen=True)
+class ThreeXUIClientRecord:
+    inbound_id: int
+    client: dict
+
+
 def is_three_xui_configured() -> bool:
     return bool(
         settings.threexui_base_url
@@ -184,6 +190,53 @@ class ThreeXUIClient:
             access_url=build_subscription_url(sub_id),
             expiry_ms=expiry_ms,
         )
+
+    def find_client_by_id(self, client_id: str) -> ThreeXUIClientRecord | None:
+        for inbound in self.list_inbounds():
+            inbound_id = int(inbound["id"])
+            for client in _parse_clients(inbound.get("settings")):
+                if str(client.get("id")) == client_id:
+                    return ThreeXUIClientRecord(inbound_id=inbound_id, client=client)
+        return None
+
+    def update_client_expiry(self, client_id: str, expire_at: str) -> ThreeXUIAccess:
+        record = self.find_client_by_id(client_id)
+        if not record:
+            raise ThreeXUIError(f"Client {client_id} was not found in 3x-ui.")
+
+        expiry_ms = _iso_to_unix_ms(expire_at)
+        client_payload = dict(record.client)
+        client_payload["expiryTime"] = expiry_ms
+        client_payload["enable"] = True
+        payload = {
+            "id": record.inbound_id,
+            "settings": json.dumps({"clients": [client_payload]}, separators=(",", ":")),
+        }
+        self._request("POST", f"/panel/api/inbounds/updateClient/{client_id}", json=payload)
+
+        sub_id = str(client_payload.get("subId") or "").strip()
+        if not sub_id:
+            raise ThreeXUIError(f"Client {client_id} does not have subId in 3x-ui.")
+
+        return ThreeXUIAccess(
+            client_id=client_id,
+            inbound_id=record.inbound_id,
+            email=str(client_payload.get("email") or ""),
+            sub_id=sub_id,
+            access_url=build_subscription_url(sub_id),
+            expiry_ms=expiry_ms,
+        )
+
+    def delete_client(self, client_id: str) -> bool:
+        record = self.find_client_by_id(client_id)
+        if not record:
+            return False
+
+        self._request(
+            "POST",
+            f"/panel/api/inbounds/{record.inbound_id}/delClient/{client_id}",
+        )
+        return True
 
 
 def build_subscription_url(sub_id: str) -> str:
