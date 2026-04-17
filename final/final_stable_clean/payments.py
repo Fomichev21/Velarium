@@ -65,7 +65,7 @@ async def deliver_access_message_async(payment_result: dict | None) -> bool:
         "Оплата подтверждена.\n\n"
         f"Подписка активна до: {user.get('subscription_until') or 'не задано'}\n"
         f"UUID: {vpn_key.get('vpn_key') or 'не задан'}\n"
-        f"Ссылка:\n{access_url}"
+        f"Subscription Link:\n{access_url}"
     )
 
     try:
