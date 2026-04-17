@@ -7,7 +7,7 @@ from typing import Any
 
 from config import DATABASE_PATH, ROLE_ADMIN, ROLE_OWNER, TARIFFS, settings
 from vpn import build_config, generate_access_key
-from xui import ThreeXUIClient, is_three_xui_configured
+from xui import ThreeXUIClient, ThreeXUIError, is_three_xui_configured
 
 
 def connect() -> sqlite3.Connection:
@@ -44,6 +44,7 @@ def _ensure_users_table(conn: sqlite3.Connection) -> None:
             balance INTEGER DEFAULT 0,
             role INTEGER DEFAULT 1,
             subscription_until TEXT,
+            expiry_notice_for TEXT,
             is_banned INTEGER DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             referred_by INTEGER
@@ -56,6 +57,7 @@ def _ensure_users_table(conn: sqlite3.Connection) -> None:
         "balance": "ALTER TABLE users ADD COLUMN balance INTEGER DEFAULT 0",
         "role": "ALTER TABLE users ADD COLUMN role INTEGER DEFAULT 1",
         "subscription_until": "ALTER TABLE users ADD COLUMN subscription_until TEXT",
+        "expiry_notice_for": "ALTER TABLE users ADD COLUMN expiry_notice_for TEXT",
         "is_banned": "ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0",
         "created_at": "ALTER TABLE users ADD COLUMN created_at TEXT",
         "referred_by": "ALTER TABLE users ADD COLUMN referred_by INTEGER",
@@ -255,6 +257,7 @@ def get_user(user_id: int) -> dict[str, Any]:
         "balance": 0,
         "role": 1,
         "subscription_until": None,
+        "expiry_notice_for": None,
         "is_banned": 0,
         "created_at": None,
         "referred_by": None,
@@ -343,20 +346,23 @@ def list_promos(limit: int = 20) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def use_promo(user_id: int, code: str) -> int | None:
+def use_promo(user_id: int, code: str) -> dict[str, Any] | None:
     normalized_code = code.strip().upper()
     with closing(connect()) as conn:
         row = conn.execute("SELECT value FROM promos WHERE code = ?", (normalized_code,)).fetchone()
         if not row:
             return None
 
+    days = int(row["value"])
+    activation = activate_subscription_days(user_id, days, f"promo-{normalized_code.lower()}")
+    with closing(connect()) as conn:
         conn.execute("DELETE FROM promos WHERE code = ?", (normalized_code,))
-        conn.execute(
-            "UPDATE users SET balance = balance + ? WHERE user_id = ?",
-            (row["value"], user_id),
-        )
         conn.commit()
-        return int(row["value"])
+    return {
+        "days": days,
+        "subscription_until": activation["subscription_until"],
+        "config_text": activation["config_text"],
+    }
 
 
 def get_stats() -> dict[str, int]:
@@ -465,6 +471,26 @@ def get_vpn_key(user_id: int) -> dict[str, Any] | None:
     return row_to_dict(row)
 
 
+def clear_vpn_key(user_id: int) -> None:
+    with closing(connect()) as conn:
+        conn.execute("DELETE FROM vpn_keys WHERE user_id = ?", (user_id,))
+        conn.commit()
+
+
+def _set_subscription_until(user_id: int, subscription_until: str | None) -> None:
+    with closing(connect()) as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET subscription_until = ?,
+                expiry_notice_for = NULL
+            WHERE user_id = ?
+            """,
+            (subscription_until, user_id),
+        )
+        conn.commit()
+
+
 def _extend_subscription(current_value: str | None, duration_days: int) -> str:
     now = datetime.utcnow()
     current_dt = None
@@ -477,20 +503,29 @@ def _extend_subscription(current_value: str | None, duration_days: int) -> str:
     return (base_dt + timedelta(days=duration_days)).replace(microsecond=0).isoformat(sep=" ")
 
 
-def activate_subscription(user_id: int, tariff_code: str) -> dict[str, Any]:
-    tariff = TARIFFS[tariff_code]
+def activate_subscription_days(user_id: int, duration_days: int, source_code: str) -> dict[str, Any]:
     user = get_user(user_id)
-    expire_at = _extend_subscription(user.get("subscription_until"), tariff["duration_days"])
+    existing_vpn_key = get_vpn_key(user_id)
+    expire_at = _extend_subscription(user.get("subscription_until"), duration_days)
 
     if is_three_xui_configured():
         client = ThreeXUIClient()
         try:
             client.login()
-            access = client.add_client(
-                user_id=user_id,
-                tariff_code=tariff_code,
-                expire_at=expire_at,
-            )
+            access = None
+            client_id = str(existing_vpn_key.get("vpn_key") or "") if existing_vpn_key else ""
+            if client_id:
+                try:
+                    access = client.update_client_expiry(client_id, expire_at)
+                except ThreeXUIError:
+                    access = None
+
+            if access is None:
+                access = client.add_client(
+                    user_id=user_id,
+                    tariff_code=source_code,
+                    expire_at=expire_at,
+                )
         finally:
             client.close()
 
@@ -500,19 +535,40 @@ def activate_subscription(user_id: int, tariff_code: str) -> dict[str, Any]:
         access_key = generate_access_key()
         config_text = build_config(user_id, expire_at)
 
-    with closing(connect()) as conn:
-        conn.execute(
-            "UPDATE users SET subscription_until = ? WHERE user_id = ?",
-            (expire_at, user_id),
-        )
-        conn.commit()
-
+    _set_subscription_until(user_id, expire_at)
     save_vpn_key(user_id, access_key, config_text, expire_at)
 
     return {
         "subscription_until": expire_at,
         "vpn_key": access_key,
         "config_text": config_text,
+    }
+
+
+def activate_subscription(user_id: int, tariff_code: str) -> dict[str, Any]:
+    tariff = TARIFFS[tariff_code]
+    return activate_subscription_days(user_id, tariff["duration_days"], tariff_code)
+
+
+def reset_subscription(user_id: int) -> dict[str, Any]:
+    vpn_key = get_vpn_key(user_id)
+    removed_remote = False
+    client_id = str(vpn_key.get("vpn_key") or "") if vpn_key else ""
+
+    if client_id and is_three_xui_configured():
+        client = ThreeXUIClient()
+        try:
+            client.login()
+            removed_remote = client.delete_client(client_id)
+        finally:
+            client.close()
+
+    clear_vpn_key(user_id)
+    _set_subscription_until(user_id, None)
+
+    return {
+        "user": get_user(user_id),
+        "removed_remote": removed_remote,
     }
 
 
@@ -586,14 +642,11 @@ def _reward_referrer(paid_user_id: int) -> None:
         if not row:
             return
 
-        referrer_id = row["referrer_id"]
-        referrer = get_user(referrer_id)
-        new_until = _extend_subscription(referrer.get("subscription_until"), 7)
+        referrer_id = int(row["referrer_id"])
 
-        conn.execute(
-            "UPDATE users SET subscription_until = ? WHERE user_id = ?",
-            (new_until, referrer_id),
-        )
+    activate_subscription_days(referrer_id, 3, "referral")
+
+    with closing(connect()) as conn:
         conn.execute(
             "UPDATE referrals SET rewarded = 1 WHERE referred_id = ?",
             (paid_user_id,),
@@ -613,6 +666,34 @@ def get_referral_stats(user_id: int) -> dict[str, Any]:
             (user_id,),
         ).fetchone()["count"]
     return {"total": int(total), "rewarded": int(rewarded)}
+
+
+def list_users_expiring_soon(within_hours: int = 24) -> list[dict[str, Any]]:
+    now = datetime.utcnow().replace(microsecond=0)
+    upper_bound = now + timedelta(hours=within_hours)
+    with closing(connect()) as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM users
+            WHERE subscription_until IS NOT NULL
+              AND subscription_until > ?
+              AND subscription_until <= ?
+              AND (expiry_notice_for IS NULL OR expiry_notice_for != subscription_until)
+            ORDER BY subscription_until ASC
+            """,
+            (now.isoformat(sep=" "), upper_bound.isoformat(sep=" ")),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def mark_expiry_notice_sent(user_id: int, subscription_until: str) -> None:
+    with closing(connect()) as conn:
+        conn.execute(
+            "UPDATE users SET expiry_notice_for = ? WHERE user_id = ?",
+            (subscription_until, user_id),
+        )
+        conn.commit()
 
 
 def mark_payment_access_sent(payment_id: str) -> None:
