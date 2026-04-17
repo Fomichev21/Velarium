@@ -9,6 +9,7 @@ from aiogram.exceptions import TelegramNetworkError
 from config import settings
 from database import init_db
 from handlers import admin, help, user
+from payments import process_expiry_reminders
 
 
 def build_bot() -> Bot:
@@ -29,6 +30,7 @@ async def main() -> None:
     dispatcher.include_router(admin.router)
     dispatcher.include_router(user.router)
     dispatcher.include_router(help.router)
+    reminder_task = asyncio.create_task(reminder_loop(bot))
 
     try:
         await dispatcher.start_polling(bot)
@@ -44,7 +46,21 @@ async def main() -> None:
             f"{proxy_hint}"
         ) from exc
     finally:
+        reminder_task.cancel()
+        await asyncio.gather(reminder_task, return_exceptions=True)
         await bot.session.close()
+
+
+async def reminder_loop(bot: Bot) -> None:
+    while True:
+        try:
+            await process_expiry_reminders(bot)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+
+        await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":
